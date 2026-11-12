@@ -31,13 +31,13 @@ A sidebar for Herdr: every space is a folder with its agents, sub-agents and ter
 
 ```sh
 input=$(cat)
-echo "$input" | ~/Works/opensource/herdr-mods/space-tree/claude-limits.sh
+echo "$input" | /path/to/herdr-mods/space-tree/claude-limits.sh
 ```
 
 or, with no status line of your own, in `~/.claude/settings.json`:
 
 ```json
-{ "statusLine": { "type": "command", "command": "~/Works/opensource/herdr-mods/space-tree/claude-limits.sh" } }
+{ "statusLine": { "type": "command", "command": "/path/to/herdr-mods/space-tree/claude-limits.sh" } }
 ```
 
 The Claude block shows up once Claude Code's status line input has had `rate_limits` at least once.

@@ -12,19 +12,19 @@ Read ~/.config/herdr-app/AGENTS.md, then add this mod: https://github.com/simono
 
 The agent follows the folder's `RECIPE.md`.
 
-Or by hand, with links, so `git pull` updates the mods:
+Or with `sync.sh`:
 
 ```sh
-git clone https://github.com/simonoff/herdr-mods ~/Works/opensource/herdr-mods
-ln -s ~/Works/opensource/herdr-mods/space-tree/mods/space-tree ~/.config/herdr-app/mods/space-tree
-ln -s ~/Works/opensource/herdr-mods/side-toast/mods/side-toast ~/.config/herdr-app/mods/side-toast
-cp ~/Works/opensource/herdr-mods/tree/layouts/tree.json ~/.config/herdr-app/layouts/tree.json
-herdr-app check ~/.config/herdr-app/mods/space-tree
-herdr-app check ~/.config/herdr-app/mods/side-toast
+git clone https://github.com/simonoff/herdr-mods
+cd herdr-mods
+./sync.sh
 herdr-app do layout.switch --name tree
 ```
 
-The layout is copied, not linked: Herdr saves your clicks next to it, and you may want to change it on one machine only. `ctrl-shift-l` switches back to your previous layout.
+- `./sync.sh` (or `./sync.sh to-herdr`) copies every mod and layout into `~/.config/herdr-app` (or `$HERDR_APP_HOME`) and runs `herdr-app check` on each mod. Run it again after `git pull`.
+- `./sync.sh from-herdr` copies them back into the repository, after you changed them in Herdr.
+
+It overwrites files of the same name and leaves other files alone. `ctrl-shift-l` switches back to your previous layout.
 
 ## The mods
 
