@@ -1,10 +1,18 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, agents, terminals, panes, focused, readTextFile, home, exec, run, openOverlay, theme, shared, setShared, setAgentOrder, layout } from "herdr";
+import { spaces, machines, agents, terminals, panes, focused, exec, run, openOverlay, theme, shared, setShared, setAgentOrder, layout } from "herdr";
 
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 const PALETTE = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
+const MACHINE_ICONS = [
+  "laptop", "laptop-minimal", "monitor", "tv", "smartphone", "tablet", "server", "server-cog", "hard-drive", "cpu", "database", "router",
+  "wifi", "globe", "cloud", "house", "building-2", "school", "factory", "warehouse", "briefcase", "box", "container", "terminal",
+  "code", "bug", "shield", "flask-conical", "gamepad-2", "rocket", "bot", "brain", "cat", "dog", "bird", "fish",
+  "rabbit", "turtle", "flame", "zap", "star", "heart", "coffee", "leaf", "mountain", "ship", "plane", "car", "ghost", "skull", "crown",
+];
+const machineColor = (key) => (shared("machine.colors") ?? {})[key] ?? (key ? PALETTE[[...key].reduce((h, c) => h + c.charCodeAt(0), 0) % PALETTE.length] : "ansi4");
+const machineIcon = (key) => `mods/space-tree/machines/${(shared("machine.icons") ?? {})[key] ?? (key ? "server" : "monitor")}.svg`;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -50,11 +58,38 @@ function subTree(all, addr, lead = []) {
 
 const CODEX_LIMITS = `find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' -mtime -8 -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -5 | cut -d' ' -f2- | while read -r f; do l=$(grep '"rate_limits":{' "$f" | tail -1); if [ -n "$l" ]; then printf '%s\\n' "$l"; break; fi; done`;
 
+const LIMITS = `printf 'claude_account\\t%s\\n' "$(jq -r '.oauthAccount.accountUuid // empty' "$HOME/.claude.json" 2>/dev/null)"
+printf 'claude_limits\\t%s\\n' "$(tr -d '\\n' 2>/dev/null < "$HOME/.cache/claude-rate-limits.json")"
+printf 'codex_account\\t%s\\n' "$(jq -r '.tokens.account_id // empty' "$HOME/.codex/auth.json" 2>/dev/null)"
+printf 'codex_limits\\t%s\\n' "$(${CODEX_LIMITS})"`;
+
 function windowLabel(minutes) {
   if (!minutes) return "?";
   if (minutes % 1440 === 0) return `${minutes / 1440}d`;
   if (minutes % 60 === 0) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function parseClaude(text) {
+  const j = JSON.parse(text);
+  const rl = j.rate_limits ?? {};
+  return {
+    at: j.at ?? 0,
+    windows: [["5h", rl.five_hour], ["7d", rl.seven_day]]
+      .filter(([, w]) => w)
+      .map(([label, w]) => ({ label, pct: w.used_percentage, resets_at: w.resets_at })),
+  };
+}
+
+function parseCodex(text) {
+  const j = JSON.parse(text);
+  const rl = j.payload?.rate_limits ?? {};
+  return {
+    at: Date.parse(j.timestamp ?? "") / 1000 || 0,
+    windows: [rl.primary, rl.secondary]
+      .filter(Boolean)
+      .map((w) => ({ label: windowLabel(w.window_minutes), pct: w.used_percent, resets_at: w.resets_at })),
+  };
 }
 
 export default class SpaceTree extends View {
@@ -69,23 +104,28 @@ export default class SpaceTree extends View {
 
   readLimits(cx) {
     cx.spawn(async (cx) => {
-      try {
-        const text = await readTextFile(`${home()}/.cache/claude-rate-limits.json`);
-        const rl = text ? JSON.parse(text).rate_limits ?? {} : {};
-        this.limits.claude = [["5h", rl.five_hour], ["7d", rl.seven_day]]
-          .filter(([, w]) => w)
-          .map(([label, w]) => ({ label, pct: w.used_percentage, resets_at: w.resets_at }));
-      } catch {
-        this.limits.claude = [];
-      }
-      try {
-        const r = await exec("sh", ["-c", CODEX_LIMITS]);
-        const rl = r.stdout.trim() ? JSON.parse(r.stdout.trim()).payload?.rate_limits ?? {} : {};
-        this.limits.codex = [rl.primary, rl.secondary]
-          .filter(Boolean)
-          .map((w) => ({ label: windowLabel(w.window_minutes), pct: w.used_percent, resets_at: w.resets_at }));
-      } catch {
-        this.limits.codex = [];
+      const names = [null, ...new Set([...spaces().map((s) => s.machine), ...machines().map((m) => m.name)].filter(Boolean))];
+      const found = { claude: [], codex: [] };
+      await Promise.all(names.map(async (m) => {
+        try {
+          const r = await exec("sh", ["-c", LIMITS], { on: m });
+          const f = Object.fromEntries(r.stdout.split("\n").filter((l) => l.includes("\t")).map((l) => [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)]));
+          for (const [agent, parse] of [["claude", parseClaude], ["codex", parseCodex]]) {
+            try {
+              if (f[`${agent}_limits`]) found[agent].push({ machine: m, account: f[`${agent}_account`] || `machine:${m ?? ""}`, ...parse(f[`${agent}_limits`]) });
+            } catch {}
+          }
+        } catch {}
+      }));
+      for (const agent of ["claude", "codex"]) {
+        const groups = new Map();
+        for (const x of found[agent].sort((a, b) => names.indexOf(a.machine) - names.indexOf(b.machine))) {
+          const g = groups.get(x.account) ?? { machines: [], at: -1, windows: [] };
+          g.machines.push(x.machine);
+          if (x.at > g.at) Object.assign(g, { at: x.at, windows: x.windows });
+          groups.set(x.account, g);
+        }
+        this.limits[agent] = [...groups.values()];
       }
       cx.notify();
     });
@@ -94,7 +134,12 @@ export default class SpaceTree extends View {
   limitsBar(t) {
     const now = Date.now() / 1000;
     const live = (list) => list.filter((w) => typeof w.pct === "number" && (!w.resets_at || w.resets_at > now));
-    const agentsShown = [["Claude", "icons/claude.svg", live(this.limits.claude)], ["Codex", "icons/codex.svg", live(this.limits.codex)]]
+    const agentsShown = [["Claude", "icons/claude.svg", this.limits.claude], ["Codex", "icons/codex.svg", this.limits.codex]]
+      .flatMap(([name, path, groups]) => groups.map((g) => [
+        groups.length > 1 ? `${name} · ${g.machines.map((m) => m ?? "this computer").join(", ")}` : name,
+        path,
+        live(g.windows),
+      ]))
       .filter(([, , list]) => list.length);
     if (!agentsShown.length) return null;
     const left = (secs) => {
@@ -205,7 +250,7 @@ export default class SpaceTree extends View {
       .child(h_flex().size(18).flex_none().rounded(5).bg(fill + "33").items_center().justify_center()
         .child(svg("mods/workspace-chrome/folder.svg").size(12).text_color(fill)))
       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(s.name))
-      .when(Boolean(s.machine), (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(s.machine)))
+      .when(Boolean(s.machine) && !this.grouped, (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(s.machine)))
       .when(!open && kids.length > 0, (el) => el.child(this.summary(t, kids, statuses, top)));
   }
 
@@ -304,6 +349,87 @@ export default class SpaceTree extends View {
         .when(p.pane === this.current, (el) => el.font_bold()).child(name));
   }
 
+  machineRow(t, m, mine, collapsed) {
+    const key = `machine:${m ?? ""}`;
+    const folded = this.folded.has(key);
+    const layoutState = machines().find((k) => k.name === m)?.layout ?? (m ? "unavailable" : "ready");
+    const online = layoutState === "ready";
+    const top = mine.reduce((acc, s) => ((RANK[s.status] ?? 0) > (RANK[acc] ?? 0) ? s.status : acc), null);
+    const blocked = mine.filter((s) => s.status === "blocked").length;
+    const done = mine.filter((s) => s.status === "done").length;
+    const alert = folded && blocked > 0;
+    const color = machineColor(m ?? "");
+    const fill = alert ? t.blocked : color.startsWith("#") ? color : (MARK[color] ?? t[color] ?? t.accent);
+    const badge = (el) => el.relative()
+      .child(svg(machineIcon(m ?? "")).size(12).text_color(fill))
+      .when(alert, (b) => b.child(div().absolute().right(-2).top(-2).size(6).rounded(3).bg(t.blocked)));
+    const pic = badge(h_flex().id(`machine-icon-${m ?? "local"}`).size(18).flex_none().rounded(5).bg(fill + "33").items_center().justify_center()
+      .tooltip("Change icon and color")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.picking = this.picking === key ? null : key; cx.notify(); }));
+    const summary = h_flex().flex_none().gap(7).items_center()
+      .child(h_flex().flex_none().gap(3).items_center().text_color(blocked > 0 ? t.blocked : t.dim)
+        .when(blocked > 0, (el) => el.font_semibold())
+        .child(svg("mods/workspace-chrome/folder.svg").size(12).flex_none()).child(String(mine.length)))
+      .when(blocked === 0 && done > 0, (el) => el.child(h_flex().flex_none().gap(3).items_center().text_color(t.done)
+        .child(div().size(7).rounded(4).bg(t.done)).child(String(done))))
+      .when(blocked === 0 && done === 0 && top === "working", (el) => el.child(this.status(t, "working")));
+    return h_flex()
+      .id(`machine-${m ?? "local"}`)
+      .h(26)
+      .flex_none()
+      .mt(6)
+      .gap(7)
+      .items_center()
+      .rounded(6)
+      .text_size(11)
+      .text_color(t.dim)
+      .cursor_pointer()
+      .hover((st) => st.bg(t.hover))
+      .tooltip(`${m ?? "This computer"} · ${layoutState}`)
+      .on_click((_e, cx) => this.toggle(key, cx))
+      .when(collapsed, (el) => el.justify_center().child(badge(h_flex().size(18).flex_none().rounded(5).bg(fill + "33").items_center().justify_center())))
+      .when(!collapsed, (el) => el.px(6)
+        .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none())
+        .child(pic)
+        .child(div().flex_1().min_w(0).truncate().child(m ?? "This computer"))
+        .when(layoutState === "loading", (el) => el.child(div().flex_none().child("Loading…")))
+        .when(folded && mine.length > 0, (el) => el.child(summary))
+        .when(online, (el) => el.child(div().id(`machine-add-${m ?? "local"}`).size(18).flex_none().flex().items_center().justify_center().rounded(4)
+          .hover((st) => st.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); })
+          .child(svg("mods/workspace-chrome/plus.svg").size(11))))
+        .child(div().size(6).mr(4).rounded(3).flex_none().bg(online ? t.ansi2 : t.dim)));
+  }
+
+  iconPicker(t, m) {
+    const current = machineIcon(m ?? "");
+    const currentColor = machineColor(m ?? "");
+    const colors = h_flex().flex_none().gap(6).px(6).py(4)
+      .children(PALETTE.map((c) => div().id(`machine-color-${m ?? "local"}-${c}`).size(16).flex_none().rounded(8).bg(MARK[c])
+        .cursor_pointer()
+        .when(c === currentColor, (el) => el.border(2).border_color(t.foreground))
+        .hover((st) => st.opacity(0.8))
+        .on_click((_e, cx) => {
+          setShared("machine.colors", { ...(shared("machine.colors") ?? {}), [m ?? ""]: c });
+          cx.notify();
+        })));
+    return v_flex().flex_none().child(colors).child(h_flex().flex_none().flex_wrap().gap(2).px(6).pb(4)
+      .children(MACHINE_ICONS.map((name) => {
+        const path = `mods/space-tree/machines/${name}.svg`;
+        return div().id(`machine-pick-${m ?? "local"}-${name}`).size(24).flex_none().flex().items_center().justify_center().rounded(5)
+          .text_color(path === current ? t.foreground : t.dim)
+          .when(path === current, (el) => el.bg(t.selected))
+          .hover((st) => st.bg(t.hover).text_color(t.foreground))
+          .tooltip(name)
+          .on_click((_e, cx) => {
+            setShared("machine.icons", { ...(shared("machine.icons") ?? {}), [m ?? ""]: name });
+            this.picking = null;
+            cx.notify();
+          })
+          .child(svg(path).size(14));
+      })));
+  }
+
   compactRow(t, s, i) {
     const glyph = s.status === "blocked" || s.status === "done" ? "●" : "·";
     return h_flex().flex_none().justify_center().child(h_flex()
@@ -343,10 +469,12 @@ export default class SpaceTree extends View {
     }
     setAgentOrder(sp.flatMap((s) => bySpace.get(s.id).filter((x) => x.a).flatMap(({ a }) => [a.address, ...subs.get(a.address).map((x) => x.k.address)])));
     const collapsed = narrow();
+    const remote = [...new Set([...sp.map((s) => s.machine), ...machines().map((m) => m.name)].filter(Boolean))].sort();
+    this.grouped = remote.length > 0;
 
-    const rows = collapsed
-      ? sp.map((s, i) => this.compactRow(t, s, i))
-      : sp.flatMap((s) => {
+    const draw = (list) => collapsed
+      ? list.map((s) => this.compactRow(t, s, sp.indexOf(s)))
+      : list.flatMap((s) => {
         const items = bySpace.get(s.id);
         const perTab = new Map();
         for (const { a } of items) if (a) perTab.set(a.tab, (perTab.get(a.tab) ?? 0) + 1);
@@ -363,6 +491,11 @@ export default class SpaceTree extends View {
           ];
         }))];
       });
+    const rows = !this.grouped ? draw(sp) : [null, ...remote].flatMap((m) => {
+      const mine = sp.filter((s) => (s.machine ?? null) === m);
+      const picker = !collapsed && this.picking === `machine:${m ?? ""}` ? [this.iconPicker(t, m)] : [];
+      return [this.machineRow(t, m, mine, collapsed), ...picker, ...(this.folded.has(`machine:${m ?? ""}`) ? [] : draw(mine))];
+    });
 
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
       .child(h_flex().h(31).pl(16).pr(10).flex_none().items_center().justify_between().text_size(11.5).text_color(t.dim)

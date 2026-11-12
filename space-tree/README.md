@@ -4,7 +4,8 @@ A sidebar for Herdr: every space is a folder with its agents, sub-agents and ter
 
 ## What you see
 
-- **Spaces** as rows with a chevron, a colored folder icon and the name. A space on another machine shows the machine name.
+- **Spaces** as rows with a chevron, a colored folder icon and the name.
+- **Machines**: once another machine is known, spaces are grouped under a header per machine (This computer first, then hosts by name) with a connection dot and `+` for a new space there. Click the header to fold the group; a folded group shows a folder with its space count, red when a space waits for you (the machine's icon turns red too), else the done count or a spinner. Click the machine's icon to pick its color and icon (laptop, server, house, cloud, cat…); the choice is kept in Herdr's shared state (`machine.colors`, `machine.icons`). Icons are from [Lucide](https://lucide.dev) (ISC).
 - **An open space** is a card with a border; the active space's card is grey. Under the header, in pane order:
   - agents with the program icon, a label (tab name, else title) and status: a spinner while working, a red *Needs you* pill when blocked, a filled dot when done, a hollow dot when idle;
   - sub-agents (terminals an agent started with `hc run`) nested under their agent, any depth;
@@ -24,6 +25,8 @@ A sidebar for Herdr: every space is a folder with its agents, sub-agents and ter
 - `agent.next` / `agent.prev` follow the tree's order.
 
 ## Usage limits
+
+Limits are read from every machine (through herdr-core) every 30 seconds. Machines on the same account (Claude `oauthAccount.accountUuid` in `~/.claude.json`, Codex `tokens.account_id` in `~/.codex/auth.json`, read with `jq`) share one block with the newest numbers; different accounts get a block each, labeled with their machines. The setup below applies on each machine.
 
 **Codex** needs nothing: the mod reads the last `rate_limits` record from the newest `~/.codex/sessions/**/rollout-*.jsonl` every 30 seconds. It uses GNU `find -printf` (Linux).
 
@@ -48,6 +51,6 @@ See the [repository README](../README.md). The mod needs a block in your layout:
 
 ## Runs and reads
 
-- runs `sh -c` with `find`, `sort`, `grep` over `~/.codex/sessions`;
-- reads `~/.cache/claude-rate-limits.json`;
+- runs `sh -c` on each machine with `find`, `sort`, `grep` over `~/.codex/sessions`;
+- reads `~/.cache/claude-rate-limits.json`, and only the account id fields of `~/.claude.json` and `~/.codex/auth.json` (never tokens);
 - no network.
