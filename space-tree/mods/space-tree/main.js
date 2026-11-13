@@ -1,6 +1,6 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, agents, terminals, panes, focused, exec, run, openOverlay, theme, shared, setShared, setAgentOrder, layout } from "herdr";
+import { spaces, machines, agents, terminals, panes, focused, exec, run, openOverlay, theme, shared, setShared, setAgentOrder, layout, window } from "herdr";
 
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -63,6 +63,33 @@ printf 'claude_limits\\t%s\\n' "$(tr -d '\\n' 2>/dev/null < "$HOME/.cache/claude
 printf 'codex_account\\t%s\\n' "$(jq -r '.tokens.account_id // empty' "$HOME/.codex/auth.json" 2>/dev/null)"
 printf 'codex_limits\\t%s\\n' "$(${CODEX_LIMITS})"`;
 
+const PR_FIELDS = "number,state,isDraft,title,url,reviewDecision,statusCheckRollup";
+const FAILED = ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"];
+
+function checkState(rollup) {
+  const list = rollup ?? [];
+  if (!list.length) return null;
+  if (list.some((c) => FAILED.includes(c.conclusion ?? c.state))) return "fail";
+  if (list.some((c) => (c.status && c.status !== "COMPLETED") || c.state === "PENDING" || c.state === "EXPECTED")) return "pending";
+  return "pass";
+}
+
+function places() {
+  const spaceOfTab = new Map(spaces().flatMap((s) => (s.tabs ?? []).map((tab) => [tab.id, s])));
+  const out = new Map();
+  for (const p of panes()) {
+    const s = spaceOfTab.get(p.tab);
+    if (!s || out.has(s.id) || !p.terminal || !p.cwd) continue;
+    out.set(s.id, { on: s.machine ?? null, cwd: p.cwd, branch: p.branch, key: `${s.machine ?? ""}\t${p.cwd}` });
+  }
+  return out;
+}
+
+const openUrl = (url) => {
+  const platform = window().platform;
+  exec(platform === "macos" ? "open" : platform === "windows" ? "explorer" : "xdg-open", [url]).catch(() => null);
+};
+
 function windowLabel(minutes) {
   if (!minutes) return "?";
   if (minutes % 1440 === 0) return `${minutes / 1440}d`;
@@ -100,6 +127,73 @@ export default class SpaceTree extends View {
     this.limits = { claude: [], codex: [] };
     this.readLimits(cx);
     cx.timer.every(30000, (cx) => this.readLimits(cx));
+    this.git = {};
+    this.gitBusy = new Set();
+    this.refreshGit(cx, false);
+    cx.timer.every(5000, (cx) => this.refreshGit(cx, false));
+    cx.timer.every(60000, (cx) => this.refreshGit(cx, true));
+  }
+
+  refreshGit(cx, all) {
+    const due = [...new Map([...places().values()].map((w) => [w.key, w])).values()]
+      .filter((w) => w.branch && !this.gitBusy.has(w.key) && (all || this.git[w.key]?.branch !== w.branch));
+    for (const w of due) {
+      this.gitBusy.add(w.key);
+      cx.spawn(async (cx) => {
+        const opts = { cwd: w.cwd, on: w.on };
+        const [counts, pr] = await Promise.all([
+          exec("git", ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], opts).catch(() => null),
+          exec("gh", ["pr", "view", "--json", PR_FIELDS], { ...opts, timeout: 15000 }).catch(() => null),
+        ]);
+        const [ahead, behind] = counts?.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
+        let info = null;
+        try {
+          if (pr?.code === 0) info = JSON.parse(pr.stdout);
+        } catch {}
+        this.git[w.key] = { branch: w.branch, ahead, behind, pr: info };
+        this.gitBusy.delete(w.key);
+        cx.notify();
+      });
+    }
+  }
+
+  gitInfo(s) {
+    const w = this.places?.get(s.id);
+    if (!w?.branch) return null;
+    const g = this.git[w.key];
+    return g && g.branch === w.branch ? { branch: w.branch, ahead: g.ahead, behind: g.behind, pr: g.pr } : { branch: w.branch, ahead: 0, behind: 0, pr: null };
+  }
+
+  branchIcon(t, s, g) {
+    return div().id(`branch-${s.id}`).flex_none().text_color(t.dim)
+      .tooltip(g.branch)
+      .child(svg("mods/workspace-chrome/git-branch.svg").size(12));
+  }
+
+  gitTail(t, s, g) {
+    if (!g.ahead && !g.behind && !g.pr) return null;
+    return h_flex().flex_none().gap(5).items_center().text_size(11)
+      .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`↑${g.ahead}`)))
+      .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`↓${g.behind}`)))
+      .when(Boolean(g.pr), (el) => el.child(this.prChip(t, s, g.pr)));
+  }
+
+  prChip(t, s, pr) {
+    const color = pr.state === "MERGED" ? t.ansi5 : pr.state === "CLOSED" ? t.ansi1 : pr.isDraft ? t.dim : t.ansi2;
+    const ck = checkState(pr.statusCheckRollup);
+    const ckColor = { pass: t.ansi2, fail: t.blocked, pending: t.ansi3 }[ck];
+    const review = { APPROVED: "approved", CHANGES_REQUESTED: "changes requested", REVIEW_REQUIRED: "review required" }[pr.reviewDecision];
+    const tip = [`#${pr.number} ${pr.title}`, [pr.isDraft ? "draft" : String(pr.state).toLowerCase(), ck && `checks ${ck}`, review].filter(Boolean).join(" · ")].join("\n");
+    return h_flex().id(`pr-${s.id}`).flex_none().gap(4).px(5).h(16).rounded(4).items_center().bg(color + "26").text_color(color).cursor_pointer()
+      .tooltip(tip)
+      .hover((st) => st.bg(color + "40"))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); openUrl(pr.url); })
+      .child(svg("mods/space-tree/icons/git-pull-request.svg").size(11).flex_none())
+      .child(`#${pr.number}`)
+      .when(Boolean(ckColor), (el) => el.child(div().size(6).rounded(3).flex_none().bg(ckColor)))
+      .when(pr.reviewDecision === "APPROVED", (el) => el.child(svg("mods/workspace-chrome/check.svg").size(10).flex_none().text_color(t.ansi2)))
+      .when(pr.reviewDecision === "CHANGES_REQUESTED", (el) => el.child(svg("mods/workspace-chrome/x.svg").size(10).flex_none().text_color(t.blocked)));
   }
 
   readLimits(cx) {
@@ -203,6 +297,8 @@ export default class SpaceTree extends View {
     const from = this.pressed === null ? -1 : sp.findIndex((x) => x.id === this.pressed);
     const here = sp.findIndex((x) => x.id === s.id);
     const target = this.pressed !== null && this.pressed !== s.id && this.over === s.id;
+    const git = this.gitInfo(s);
+    const tail = git && this.gitTail(t, s, git);
     return h_flex()
       .relative()
       .id(`space-${s.id}`)
@@ -249,7 +345,9 @@ export default class SpaceTree extends View {
           .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11))))
       .child(h_flex().size(18).flex_none().rounded(5).bg(fill + "33").items_center().justify_center()
         .child(svg("mods/workspace-chrome/folder.svg").size(12).text_color(fill)))
+      .when(Boolean(git), (el) => el.child(this.branchIcon(t, s, git)))
       .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(s.name))
+      .when(Boolean(tail), (el) => el.child(tail))
       .when(Boolean(s.machine) && !this.grouped, (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(s.machine)))
       .when(!open && kids.length > 0, (el) => el.child(this.summary(t, kids, statuses, top)));
   }
@@ -452,6 +550,7 @@ export default class SpaceTree extends View {
     const sp = spaces();
     const colors = this.colors(sp);
     this.current = focused()?.pane ?? null;
+    this.places = places();
     const listedAgents = agents();
     const listed = new Map(listedAgents.map((a) => [a.address, a.status]));
     const all = terminals();

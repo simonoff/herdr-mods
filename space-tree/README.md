@@ -6,6 +6,7 @@ A sidebar for Herdr: every space is a folder with its agents, sub-agents and ter
 
 - **Spaces** as rows with a chevron, a colored folder icon and the name.
 - **Machines**: once another machine is known, spaces are grouped under a header per machine (This computer first, then hosts by name) with a connection dot and `+` for a new space there. Click the header to fold the group; a folded group shows a folder with its space count, red when a space waits for you (the machine's icon turns red too), else the done count or a spinner. Click the machine's icon to pick its color and icon (laptop, server, house, cloud, cat…); the choice is kept in Herdr's shared state (`machine.colors`, `machine.icons`). Icons are from [Lucide](https://lucide.dev) (ISC).
+- **Git**, when the space's first terminal is in a repo: a branch icon before the name (hover it for the branch), and after the name `↑N` / `↓N` against upstream and the branch's pull request from `gh`: `#123` in green (open), grey (draft), purple (merged) or red (closed), a dot for checks (green passed, orange running, red failed) and ✓ / ✕ for an approving or change-requesting review. Hover for the PR title; click to open it in the browser.
 - **An open space** is a card with a border; the active space's card is grey. Under the header, in pane order:
   - agents with the program icon, a label (tab name, else title) and status: a spinner while working, a red *Needs you* pill when blocked, a filled dot when done, a hollow dot when idle;
   - sub-agents (terminals an agent started with `hc run`) nested under their agent, any depth;
@@ -52,5 +53,6 @@ See the [repository README](../README.md). The mod needs a block in your layout:
 ## Runs and reads
 
 - runs `sh -c` on each machine with `find`, `sort`, `grep` over `~/.codex/sessions`;
+- runs `git rev-list` and `gh pr view` in each space's folder, on its machine, when the branch changes and every minute; `gh` reaches GitHub, and without `gh` (or not logged in) only the branch shows;
 - reads `~/.cache/claude-rate-limits.json`, and only the account id fields of `~/.claude.json` and `~/.codex/auth.json` (never tokens);
-- no network.
+- no network of its own beyond `gh`.
