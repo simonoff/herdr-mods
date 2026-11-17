@@ -3,7 +3,7 @@ set -eu
 
 repo=$(cd "$(dirname "$0")" && pwd)
 herdr="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
-mods="space-tree side-toast"
+mods="space-tree side-toast backlog"
 layouts="tree"
 
 copy() {

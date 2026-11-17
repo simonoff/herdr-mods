@@ -30,6 +30,7 @@ It overwrites files of the same name and leaves other files alone. `ctrl-shift-l
 
 - [Space Tree](space-tree/README.md) (`space-tree`): spaces as folders, with their agents, sub-agents and terminals as a tree; drag to reorder; a folded space shows counts and who waits for you; Claude and Codex usage limits at the bottom.
 - [Side Toast](side-toast/README.md) (`side-toast`): Herdr's notifications at the bottom left of the work area instead of the right.
+- [Backlog](backlog/README.md) (`backlog`): the `docs/backlog/` items of the focused space's repo in a popup (`ctrl-shift-j`) and a pane; hand an item to an agent in a new tab.
 - [Tree](tree/RECIPE.md) (`tree`): Herdr's main layout with Space Tree in the sidebar and Side Toast for notifications.
 
 ## License
