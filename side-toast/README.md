@@ -10,6 +10,7 @@ Up to five cards, 320px wide, stacked in a floating block at the left edge of th
 
 - A card stays for the notification's `timeout`, else 6 seconds.
 - Click: runs the notification's action (for example, goes to the agent that finished) and closes the card.
+- ×: closes the card without running the action.
 - Drag the block anywhere; Herdr remembers the spot.
 
 ## Install

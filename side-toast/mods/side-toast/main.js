@@ -1,4 +1,4 @@
-import { View, div, image } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { props, closeOverlay, run, theme, shared, setShared } from "herdr";
 
@@ -28,8 +28,10 @@ export default class SideToast extends View {
     });
   }
 
-  dismiss(id) {
+  dismiss(id, cx) {
     setShared(KEY, items().filter((n) => n.id !== id));
+    this.count = items().length;
+    cx.notify();
   }
 
   card(t, n) {
@@ -44,14 +46,21 @@ export default class SideToast extends View {
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click(() => {
+      .on_click((_e, cx) => {
         if (n.action?.name) run(n.action.name, n.action.args ?? {});
-        this.dismiss(n.id);
+        this.dismiss(n.id, cx);
       })
       .child(n.icon ? image(n.icon).w(18).h(18).flex_none() : div().size(8).rounded(4).flex_none().bg(t[DOT[n.level] ?? "accent"]))
       .child(v_flex().flex_1().min_w(0)
         .child(div().truncate().font_semibold().text_size(13).text_color(t.foreground).child(n.title))
-        .when(Boolean(n.body), (el) => el.child(div().truncate().text_size(12).text_color(t.muted).child(n.body))));
+        .when(Boolean(n.body), (el) => el.child(div().truncate().text_size(12).text_color(t.muted).child(n.body))))
+      .child(div().id(`toast-close-${n.id}`).size(20).flex_none().flex().items_center().justify_center().rounded(4)
+        .text_color(t.muted)
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .tooltip("Close")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); this.dismiss(n.id, cx); })
+        .child(svg("mods/workspace-chrome/x.svg").size(11)));
   }
 
   render() {
